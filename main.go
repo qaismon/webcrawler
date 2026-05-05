@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"golang.org/x/net/html"
 	"sync"
+	"time"
 )
 
 type Job struct{
@@ -27,9 +28,10 @@ const maxDepth=2
 
 func main() {
 	jobs:=make(chan Job, 100)
+	rate:= time.Tick(300 * time.Millisecond)
 	
 	for i:=0;i<5;i++{
-		go worker(jobs)
+		go worker(jobs, rate)
 	}
 
 	wg.Add(1)
@@ -50,13 +52,16 @@ func main() {
 }
 
 
-func worker(jobs chan Job){
+func worker(jobs chan Job, rate <-chan time.Time){
 	for job:=range jobs{
 
 		if job.Depth>maxDepth{
 			wg.Done()
 			continue
 		}
+
+		<-rate
+
 		fmt.Println("Crawling:", job.URL, "Depth:", job.Depth)
 
 		resp, err:= http.Get(job.URL)
