@@ -18,7 +18,8 @@ var (
 	visited=make(map[string]bool)
 	count int
 	mu sync.Mutex
-	baseHost = "news.ycombinator.com"
+	wg sync.WaitGroup
+	baseHost = "github.com/qaismon"
 )
 
 const maxDepth=2
@@ -31,24 +32,36 @@ func main() {
 		go worker(jobs)
 	}
 
+	wg.Add(1)
 	jobs <-Job{
-		URL : "https://news.ycombinator.com",
+		URL : "https://github.com/qaismon",
 		Depth: 0,
 	}
 
-	select {}
+	wg.Wait()
+
+	close(jobs)
+	fmt.Println("\n====== DONE ======")
+	fmt.Println("Total unique links:", count)
+
+	for _,l := range links{
+		fmt.Println(l)
+	}
 }
 
 
 func worker(jobs chan Job){
 	for job:=range jobs{
+
 		if job.Depth>maxDepth{
+			wg.Done()
 			continue
 		}
 		fmt.Println("Crawling:", job.URL, "Depth:", job.Depth)
 
 		resp, err:= http.Get(job.URL)
 		if(err!=nil){
+			wg.Done()
 			continue
 		}
 
@@ -56,9 +69,12 @@ func worker(jobs chan Job){
 		resp.Body.Close()
 
 		if(err!=nil){
+			wg.Done()
 			continue
 		}
 		extractLinks(doc,jobs, job.Depth)
+
+		wg.Done()
 	}
 }
 
@@ -93,9 +109,15 @@ func extractLinks(n *html.Node, jobs chan Job, depth int) {
 						fmt.Println("Found:", link)
 						mu.Unlock()
 
+						wg.Add(1)
 						select{
-						case jobs<- Job{URL: link, Depth: depth+1}:
+						case jobs <- Job{
+							URL: link, 
+							Depth: depth+1,
+							}:
 						default:
+							wg.Done()
+
 						}
 					}else{
 						mu.Unlock()
