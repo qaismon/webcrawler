@@ -6,12 +6,24 @@ import (
 	"net/url"
 	"golang.org/x/net/html"
 	"sync"
+	"strings"
 	"time"
+	"sort"
 )
 
 type Job struct{
 	URL string
 	Depth int
+}
+
+type JobData struct {
+	Title string
+	Tags  []string
+}
+
+type SkillStat struct {
+	Name  string
+	Count int
 }
 
 var (
@@ -20,8 +32,18 @@ var (
 	count int
 	mu sync.Mutex
 	wg sync.WaitGroup
-	baseHost = "github.com"
+	baseHost = "remoteok.com"
 )
+
+var skills = []string{
+	"go", "react", "node", "docker",
+	"python", "aws", "kubernetes", "mongodb",
+}
+
+var skillFreq = make(map[string]int)
+var jobsData []JobData
+
+
 
 const (
 	maxDepth=2
@@ -42,19 +64,39 @@ func main() {
 
 	wg.Add(1)
 	jobs <-Job{
-		URL : "https://github.com/qaismon",
+		URL : "https://remoteok.com/remote-dev-jobs",
 		Depth: 0,
 	}
 
 	wg.Wait()
+	analyzeFromJobs()
 
 	close(jobs)
-	fmt.Println("\n====== DONE ======")
-	fmt.Println("Total unique links:", count)
 
-	for _,l := range links{
-		fmt.Println(l)
-	}
+fmt.Println("\n====== DONE ======")
+
+// build stats slice
+var stats []SkillStat
+for k, v := range skillFreq {
+	stats = append(stats, SkillStat{k, v})
+}
+
+sort.Slice(stats, func(i, j int) bool {
+	return stats[i].Count > stats[j].Count
+})
+
+total := 0
+for _, s := range stats {
+	total += s.Count
+}
+
+fmt.Println("\n====== SKILL DEMAND RANKING ======")
+
+for _, s := range stats {
+	percent := float64(s.Count) / float64(total) * 100
+	fmt.Printf("%s → %d (%.2f%%)\n", s.Name, s.Count, percent)
+}
+	
 }
 
 
@@ -84,8 +126,7 @@ func worker(jobs chan Job, rate <-chan time.Time){
 			wg.Done()
 			continue
 		}
-		extractLinks(doc,jobs, job.Depth)
-
+		extractJobs(doc)
 		wg.Done()
 	}
 }
@@ -108,6 +149,33 @@ func fetchWithRetry(url string, maxRetries int) (*http.Response, error) {
 	}
 
 	return nil, err
+}
+
+
+func extractText(n *html.Node) string {
+	if n.Type == html.TextNode {
+		return n.Data
+	}
+
+	var result string
+
+	for c:=n.FirstChild; c !=nil; c=c.NextSibling {
+		result+=extractText(c)
+	}
+	return result
+}
+
+func analyzeSkills(text string){
+	text=strings.ToLower(text)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, skill := range skills{
+		if strings.Contains(text, skill){
+			skillFreq[skill]++
+		}
+	}
 }
 
 
@@ -173,5 +241,68 @@ func extractLinks(n *html.Node, jobs chan Job, depth int) {
 
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		extractLinks(c, jobs, depth)
+	}
+}
+
+func extractJobs(n *html.Node) {
+	if n.Type == html.ElementNode && n.Data == "tr" {
+		for _, attr := range n.Attr {
+			if attr.Key == "class" && strings.Contains(attr.Val, "job") {
+
+				job := JobData{}
+
+				var f func(*html.Node)
+				f = func(node *html.Node) {
+
+					if node.Type == html.ElementNode && node.Data == "h2" && node.FirstChild != nil {
+						job.Title = node.FirstChild.Data
+					}
+
+					if node.Type == html.ElementNode && node.Data == "div" {
+						for _, a := range node.Attr {
+							if a.Key == "class" && strings.Contains(a.Val, "tags") {
+
+								for c := node.FirstChild; c != nil; c = c.NextSibling {
+									if c.Type == html.ElementNode && c.Data == "span" && c.FirstChild != nil {
+										job.Tags = append(job.Tags, c.FirstChild.Data)
+									}
+								}
+							}
+						}
+					}
+
+					for c := node.FirstChild; c != nil; c = c.NextSibling {
+						f(c)
+					}
+				}
+
+				f(n)
+
+				mu.Lock()
+				jobsData = append(jobsData, job)
+				mu.Unlock()
+			}
+		}
+	}
+
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		extractJobs(c)
+	}
+}
+
+func analyzeFromJobs() {
+	mu.Lock()
+	defer mu.Unlock()
+
+	for _, job := range jobsData {
+		for _, tag := range job.Tags {
+			tag = strings.ToLower(tag)
+
+			for _, skill := range skills {
+				if strings.Contains(tag, skill) {
+					skillFreq[skill]++
+				}
+			}
+		}
 	}
 }
