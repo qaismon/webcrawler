@@ -2,67 +2,115 @@ package main
 
 import (
 	"fmt"
-	"log"
-
+"strings"
 	"github.com/playwright-community/playwright-go"
+	"net/http"
+	"encoding/json"
 )
 
+var skillFreq = make(map[string]int)
+
+type SkillStat struct {
+	Name string `json:"name"`
+	Count int `json:"count"`
+	Percent float64 `json: "percent"`
+}
+
+var ignoreWords = map[string]bool{
+	"senior": true,
+	"lead": true,
+	"leader": true,
+	"engineer": true,
+	"executive": true,
+	"manager": true,
+	"director": true,
+	"sales": true,
+	"technical": true,
+}
+
 func main() {
-	pw, err := playwright.Run()
-	if err != nil {
-		log.Fatal(err)
+    http.HandleFunc("/skills", skillHandler)
+
+    fmt.Println("Server running on :8080")
+    http.ListenAndServe(":8080", nil)
+}
+
+func getSkillStats() []SkillStat {
+
+    skillFreq = make(map[string]int) // reset
+
+    pw, _ := playwright.Run()
+    browser, _ := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
+        Headless: playwright.Bool(true),
+    })
+
+    page, _ := browser.NewPage()
+    page.Goto("https://remoteok.com/remote-dev-jobs")
+    page.WaitForSelector("tr.job:not(.placeholder)")
+
+    rows, _ := page.QuerySelectorAll("tr.job:not(.placeholder)")
+
+    for _, row := range rows {
+
+        tagEls, _ := row.QuerySelectorAll(".tag")
+
+        seen := make(map[string]bool)
+
+        for _, t := range tagEls {
+            txt, _ := t.InnerText()
+
+            txt = strings.TrimSpace(txt)
+            txt = strings.ToLower(txt)
+            txt = normalizeSkill(txt)
+
+            if ignoreWords[txt] || txt == "" {
+                continue
+            }
+
+            if seen[txt] {
+                continue
+            }
+            seen[txt] = true
+
+            skillFreq[txt]++
+        }
+    }
+
+    browser.Close()
+    pw.Stop()
+
+    var stats []SkillStat
+
+    total := 0
+    for _, v := range skillFreq {
+        total += v
+    }
+
+    for k, v := range skillFreq {
+        stats = append(stats, SkillStat{
+            Name:    k,
+            Count:   v,
+            Percent: float64(v) / float64(total) * 100,
+        })
+    }
+
+    return stats
+}
+
+func skillHandler(w http.ResponseWriter, r *http.Request) {
+	stats := getSkillStats()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
+func normalizeSkill(s string) string {
+	switch s {
+	case "golang":
+		return "go"
+	case "js":
+		return "javascript"
+	default:
+		return s
 	}
-
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	page, err := browser.NewPage()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	_, err = page.Goto("https://remoteok.com/remote-dev-jobs")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// wait for jobs to load
-	_, err = page.WaitForSelector("tr.job")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// 🔥 EXTRACTION STARTS HERE
-	rows, err := page.QuerySelectorAll("tr.job")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for _, row := range rows {
-
-		titleEl, _ := row.QuerySelector("h2")
-		tagEls, _ := row.QuerySelectorAll(".tags span")
-
-		title := ""
-		if titleEl != nil {
-			title, _ = titleEl.InnerText()
-		}
-
-		var tags []string
-		for _, t := range tagEls {
-			txt, _ := t.InnerText()
-			tags = append(tags, txt)
-		}
-
-		fmt.Println("Title:", title)
-		fmt.Println("Tags:", tags)
-		fmt.Println("------")
-	}
-
-	browser.Close()
-	pw.Stop()
 }
